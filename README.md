@@ -11,7 +11,7 @@ The instance running on the client will read from STDIN and send AES-GCM protect
 
 To be equivalent to the nc command, information entered in STDIN on the server should make its way to STDOUT on the client. To do this, I have used the select call to block and wait for input either on standard input or the network socket. As an alternative to using select, you may use multiple threads, although this is far less efficient.
 
-
+</br><br>
 A sample execution with bi-directional ﬂow is as follows:
 
 On the SERVER side:
@@ -22,7 +22,7 @@ On the CLIENT side:
 
 	$./snc --key IAMAWESOME 127.0.0.1 9999 < csend.txt > cout.txt
 
-
+</br><br>
 The usage is as follows:
 
 usage: snc.py [-h] [--key KEY] [-l] dest_port [dest_port ...]
@@ -34,10 +34,10 @@ optional arguments:
   -h, --help    show this help message and exit
   --key KEY     The key used for encryption/decryption
   -l, --listen  Listen
-
+</br><br>
 
 Modules used : argparser, socket, sys, queue, select, pycryptodome
-
+</br><br>
 
 The program was tested on the following environment:(NCSU's VCL)
 
