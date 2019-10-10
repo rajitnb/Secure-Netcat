@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+import argparse
+import socket, select, sys, queue
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+from Crypto.Hash import SHA512
+from Crypto.Protocol.KDF import PBKDF2
+
+#The command line parser
+parser = argparse.ArgumentParser()
+parser.add_argument("--key", help = "The key used for encryption/decryption")
+parser.add_argument("-l", "--listen", help = "Listen", action = "store_true")
+parser.add_argument("dest_port", help = "Destination IP address and the port number", nargs = "+")
+args = parser.parse_args()
+
+if len(args.dest_port) == 1:
+    port = int(args.dest_port[0])
+else:
+    ip = args.dest_port[0]
+    port = int(args.dest_port[1])
+
+#Defining the Encryption function
+def encry(data, k):
+    data = data.encode()
+    cipher = AES.new(k, AES.MODE_GCM)
+    ciphertext, tag = cipher.encrypt_and_digest(data)
+    nonce = cipher.nonce
+    c = nonce, tag, ciphertext
+    return c
+
+#Defining the Decryption function
+def decry(data, k):
+    nonce = data[:16]
+    tag = data[16:32]
+    ciphertext = data[32:]
+    cipher = AES.new(k, AES.MODE_GCM, nonce)
+    plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+    plaintext = plaintext.decode()
+    return plaintext
+
+#Handling CTRL-C
+def signal_handler(signal, frame):
+    #print('You pressed Ctrl+C!')
+    sys.exit(0)
+    signal.signal(signal.SIGINT, signal_handler)
+    while 1:
+        continue
+
+#Server code:
+if args.listen:
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    inp = [sys.stdin]
+    outp = [sys.stdout]
+    #Initialize queues for data from stdin and client
+    std_queue = queue.Queue()
+    cli_queue = queue.Queue()
+
+    #Server bind, listen and accept
+    server.bind(('', port))
+    server.listen(5)
+    c, addr = server.accept()
+    inp.append(c)
+
+    #Receive salt from client and calculate the key used for AES
+    salt = c.recv(16)
+    k = PBKDF2(args.key, salt, 32, count = 100000)
+    d = False
+    me = False
+
+    #try and except blocks for catching CTRL-C as KeyboardInterrupt
+    try:
+        #While data from stdin and client is not done reading
+        while not (d and me):
+            read, write, errors = select.select(inp, outp, [])
+            for s in read:
+                #if input is from stdin
+                if s == sys.stdin:
+                    data = s.readline()
+                    if data:
+                        #Encrypt and put data in the std_queue
+                        e = encry(data, k)
+                        nonce, tag, ciphertext = e
+                        l = len(nonce)+ len(tag) + len(ciphertext)
+                        str_l = str(l)
+                        fixed_len = (16-len(str_l))*'0' + str_l
+                        std_queue.put((fixed_len.encode())+nonce+tag+ciphertext)
+                        #Add socket 'c' to the output list
+                        if c not in outp:
+                            outp.append(c)
+                    else:
+                        #Remove stdin from inputs list
+                        inp.remove(sys.stdin)
+                        #Set flag checking if data reading from stdin is done to True
+                        me = True
+
+                #if input is from client    
+                else:
+                    l = s.recv(16)
+                    if l:
+                        #Decrypt and put data in the cli_queue
+                        to_r = int(l.decode())
+                        total_r = 0
+                        data = b''
+                        while total_r < to_r:
+                            a = s.recv(to_r - total_r)
+                            total_r += len(a)
+                            data += a
+                        cli_queue.put(decry(data, k))
+                        #Add stdout to the outputs list
+                        if sys.stdout not in outp:
+                            outp.append(sys.stdout)
+                    else:
+                        #Remove 'c' from inputs list
+                        inp.remove(c)
+                        #Set flag which checks if data reading from client is done to True
+                        d = True
+                        #Checks if stdin is empty
+                        if not select.select([sys.stdin], [], [], 0)[0]:
+                            me = True
+
+            for s in write:
+                #writing to stdout data received from client
+                if s == sys.stdout:
+                    while not cli_queue.empty():
+                        msg = cli_queue.get_nowait()
+                        s.write(msg)
+                else:
+                    #writing to client data received from stdin
+                    while not std_queue.empty():
+                        msg = std_queue.get_nowait()
+                        s.sendall(msg)
+                    #if data reading from stdin is done, let client know server wont write anymore
+                    if(me):
+                        c.shutdown(socket.SHUT_WR)
+                outp.remove(s)
+
+    except KeyboardInterrupt:
+        exit()
+
+    #Close the socket
+    c.close()
+
+#
+#
+#
+#
+#
+#Client code:
+else:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect((ip, port))
+    #Calculate salt and AES Encryption key
+    salt = get_random_bytes(16)
+    k = PBKDF2(args.key, salt, 32, count = 100000)
+
+    #Send salt to server
+    sock.sendall(salt)
+    inp = [sys.stdin]
+    outp = [sys.stdout]
+    #Initialize queues for data from stdin and server
+    std_queue = queue.Queue()
+    serv_queue = queue.Queue()
+    inp.append(sock)
+
+    d = False
+    me = False
+    #try and except blocks for catching CTRL-C as KeyboardInterrupt
+    try:
+        #While data from stdin and client is not done reading
+        while not (d and me):
+            read, write, errors = select.select(inp, outp, [])
+            for s in read:
+                #if input is from stdin
+                if s == sys.stdin:
+                    data = s.readline()
+                    if data:
+                        #Encrypt and put data in the std_queue
+                        e = encry(data, k)
+                        nonce, tag, ciphertext = e
+                        l = len(nonce)+ len(tag) + len(ciphertext)
+                        str_l = str(l)
+                        fixed_len = (16-len(str_l))*'0' + str_l
+                        std_queue.put((fixed_len.encode())+nonce+tag+ciphertext)
+                        #Add socket 'sock' to the output list
+                        if sock not in outp:
+                            outp.append(sock)
+                    else:
+                        #Remove 'stdin' from inputs list
+                        inp.remove(sys.stdin)
+                        #Set flag checking if data reading from stdin is done to True
+                        me = True
+
+                #if input is from client
+                else:
+                    l = s.recv(16)
+                    if l:
+                        #Decrypt and put data in the serv_queue
+                        to_r = int(l.decode())
+                        total_r = 0
+                        data = b''
+                        while total_r < to_r:
+                            a = s.recv(to_r - total_r)
+                            total_r += len(a)
+                            data += a
+                        serv_queue.put(decry(data, k))
+                        #Add stdout to the outputs list
+                        if sys.stdout not in outp:
+                            outp.append(sys.stdout)
+                    else:
+                        #Remove 'sock' from inputs list
+                        inp.remove(sock)
+                        #Set flag which checks if data reading from client is done to True
+                        d = True
+                        #Checks if stdin is empty
+                        if not select.select([sys.stdin], [], [], 0.0)[0]:
+                            me = True
+    
+            #rint(inp)        
+            for s in write:
+                #writing to stdout data received from server
+                if s == sys.stdout:
+                    while not serv_queue.empty():
+                        msg = serv_queue.get_nowait()
+                        s.write(msg)
+                else:
+                    #writing to client data received from stdin
+                    while not std_queue.empty():
+                        msg = std_queue.get_nowait()
+                        s.sendall(msg)
+                    #if data reading from stdin is done, let client know server wont write anymore
+                    if(me):
+                        sock.shutdown(socket.SHUT_WR)
+                outp.remove(s)
+
+    except KeyboardInterrupt:
+        exit()
+
+    #Close the socket 
+    sock.close()
