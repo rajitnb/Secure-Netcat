@@ -34,7 +34,10 @@ optional arguments:
   -h, --help    show this help message and exit
   --key KEY     The key used for encryption/decryption
   -l, --listen  Listen
-  
+
+
+Modules used : argparser, socket, sys, queue, select, pycryptodome
+
 
 The program was tested on the following environment:(NCSU's VCL)
 
